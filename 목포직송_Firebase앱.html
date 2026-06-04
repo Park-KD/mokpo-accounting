@@ -740,13 +740,17 @@ function pickDate(val) {
 // ── FIRESTORE LISTENERS ────────────────────────
 function subscribeAll() {
   if (!window._db) return;
-  const { collection, query, where, orderBy, onSnapshot } = window._fbc;
+  const { collection, query, where, onSnapshot } = window._fbc;
   ['income','expense','purchase','credit_buy'].forEach(type => {
-    const q = query(collection(window._db, type),
-                    where('date','==',cDate),
-                    orderBy('createdAt','asc'));
+    const q = query(
+      collection(window._db, type),
+      where('date','==',cDate)
+    );
     const unsub = onSnapshot(q, snap => {
-      data[type] = snap.docs.map(d=>({id:d.id,...d.data()}));
+      // 클라이언트에서 createdAt 기준 정렬 (인덱스 불필요)
+      data[type] = snap.docs
+        .map(d=>({id:d.id,...d.data()}))
+        .sort((a,b)=>(a.createdAt||0)-(b.createdAt||0));
       renderList(type);
       renderDaily();
       if (document.getElementById('tab-export').style.display!=='none') renderExport();
