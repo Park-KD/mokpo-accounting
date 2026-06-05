@@ -78,6 +78,9 @@ body{font-family:'Noto Sans KR',sans-serif;background:var(--bg);color:var(--text
 .entry-amount.pos{color:var(--blue);}.entry-amount.neg{color:var(--accent2);}
 .entry-del{width:26px;height:26px;border-radius:50%;background:#ffebee;border:none;color:var(--accent2);font-size:14px;display:flex;align-items:center;justify-content:center;cursor:pointer;flex-shrink:0;transition:background 0.15s;}
 .entry-del:active{background:#ffcdd2;}
+.entry-edit{width:26px;height:26px;border-radius:50%;background:#e3f2fd;border:none;color:var(--blue);font-size:13px;display:flex;align-items:center;justify-content:center;cursor:pointer;flex-shrink:0;transition:background 0.15s;}
+.entry-edit:active{background:#bbdefb;}
+.entry-actions{display:flex;gap:4px;flex-shrink:0;}
 .add-btn{width:calc(100% - 32px);padding:13px;background:none;border:2px dashed var(--border);border-radius:var(--radius-sm);color:var(--text3);font-size:13px;font-weight:600;font-family:inherit;cursor:pointer;margin:8px 16px 14px;display:flex;align-items:center;justify-content:center;gap:6px;transition:all 0.2s;}
 .add-btn:active{background:var(--bg);border-color:var(--blue);color:var(--blue);}
 .modal-overlay{position:fixed;inset:0;background:rgba(13,27,42,0.6);z-index:200;display:flex;align-items:flex-end;opacity:0;pointer-events:none;transition:opacity 0.25s;}
@@ -740,6 +743,62 @@ function pickDate(val) {
   changeDate(val);
 }
 
+// ── 수정 저장 ─────────────────────────────────
+async function updateEntry(type, docId) {
+  const { doc, setDoc } = window._fbc;
+  let updated = {};
+
+  if (type === 'income') {
+    const itype=gc('cg-income-type'), channel=v('income-channel'),
+          product=v('income-product')||v('income-product-text'),
+          amount=n('income-amount'), bank=gc('cg-income-bank'),
+          memo=v('income-memo'), proof=gc('cg-income-proof');
+    if(!itype){ showToast('⚠ 매출 유형 선택'); return; }
+    if(!amount){ showToast('⚠ 금액 입력'); return; }
+    updated = {type:itype,channel,product,amount,bank,memo,proof};
+  }
+  else if (type === 'expense') {
+    const account=gc('cg-expense-account'), vendor=v('expense-vendor'),
+          desc=v('expense-desc'), amount=n('expense-amount'),
+          proof=gc('cg-expense-proof'), bank=gc('cg-expense-bank'),
+          month=v('expense-month');
+    if(!account){ showToast('⚠ 계정과목 선택'); return; }
+    if(!amount){ showToast('⚠ 금액 입력'); return; }
+    updated = {month,account,vendor,desc,amount,proof,bank};
+  }
+  else if (type === 'purchase') {
+    const vendor=v('purchase-vendor')||v('purchase-vendor-text'),
+          product=v('purchase-product')||v('purchase-product-text'),
+          amount=n('purchase-amount'), payMethod=gc('cg-purchase-pay'),
+          proof=gc('cg-purchase-proof'), bank=gc('cg-purchase-bank');
+    if(!vendor){ showToast('⚠ 매입처 입력'); return; }
+    if(!amount){ showToast('⚠ 금액 입력'); return; }
+    updated = {vendor,product,amount,payMethod,proof,bank};
+  }
+  else if (type === 'credit_buy') {
+    const vendor=v('credit_buy-vendor')||v('credit_buy-vendor-text'),
+          product=v('credit_buy-product')||v('credit_buy-product-text'),
+          amount=n('credit_buy-amount'), proof=gc('cg-credit_buy-proof'),
+          paid=gc('cg-credit_buy-paid'), month=v('credit_buy-month');
+    if(!vendor){ showToast('⚠ 매입처 입력'); return; }
+    if(!amount){ showToast('⚠ 금액 입력'); return; }
+    updated = {month,vendor,product,amount,proof,paid};
+  }
+
+  // 기존 데이터에 업데이트 (date, createdAt 유지)
+  const orig = data[type].find(e=>e.id===docId);
+  const merged = { ...orig, ...updated };
+  delete merged.id; // id는 문서 키라 필드에서 제외
+
+  try {
+    await setDoc(doc(window._db, type, docId), merged);
+    closeModal(type);
+    showToast('✏️ 수정되었습니다');
+  } catch(err) {
+    showToast('❌ 수정 실패: '+err.message);
+  }
+}
+
 // ── FIRESTORE LISTENERS ────────────────────────
 function subscribeAll() {
   if (!window._db) return;
@@ -782,6 +841,13 @@ async function saveMeta() {
 // ── SAVE ───────────────────────────────────────
 async function saveEntry(type) {
   if (!window._db) { showToast('⚠ Firebase 미연결'); return; }
+
+  // 수정 모드
+  if (editingType === type && editingId) {
+    await updateEntry(type, editingId);
+    return;
+  }
+
   const { collection, addDoc } = window._fbc;
   let e = { date:cDate, createdAt:Date.now() };
 
@@ -842,6 +908,106 @@ async function deleteEntry(type, docId) {
   catch(e){ showToast('❌ 삭제 실패'); }
 }
 
+// ── 수정 ──────────────────────────────────────
+let editingType = null;
+let editingId   = null;
+
+function editEntry(type, docId) {
+  const entry = data[type].find(e => e.id === docId);
+  if (!entry) return;
+  editingType = type;
+  editingId   = docId;
+
+  if (type === 'income') {
+    // 칩 선택
+    setChip('cg-income-type',   entry.type   || '');
+    setChip('cg-income-bank',   entry.bank   || '');
+    setChip('cg-income-proof',  entry.proof  || '');
+    sv('income-channel',        entry.channel || '');
+    sv('income-product',        entry.product || '');
+    sv('income-product-text',   '');
+    sv('income-amount',         entry.amount  || '');
+    sv('income-memo',           entry.memo    || '');
+    // 모달 타이틀 변경
+    document.querySelector('#modal-income .modal-title').innerHTML =
+      '<span class="badge badge-blue" style="width:28px;height:28px;font-size:14px">✏️</span> 입금 수정';
+    document.querySelector('#modal-income .submit-btn').textContent = '✓ 수정 저장';
+  }
+  else if (type === 'expense') {
+    setChip('cg-expense-account', entry.account || '');
+    setChip('cg-expense-proof',   entry.proof   || '');
+    setChip('cg-expense-bank',    entry.bank    || '');
+    sv('expense-month',  entry.month  || '');
+    sv('expense-vendor', entry.vendor || '');
+    sv('expense-desc',   entry.desc   || '');
+    sv('expense-amount', entry.amount || '');
+    document.querySelector('#modal-expense .modal-title').innerHTML =
+      '<span class="badge badge-red" style="width:28px;height:28px;font-size:14px">✏️</span> 출금 수정';
+    document.querySelector('#modal-expense .submit-btn').textContent = '✓ 수정 저장';
+  }
+  else if (type === 'purchase') {
+    setChip('cg-purchase-pay',   entry.payMethod || '');
+    setChip('cg-purchase-proof', entry.proof     || '');
+    setChip('cg-purchase-bank',  entry.bank      || '');
+    sv('purchase-vendor',       entry.vendor  || '');
+    sv('purchase-vendor-text',  '');
+    sv('purchase-product',      entry.product || '');
+    sv('purchase-product-text', '');
+    sv('purchase-amount',       entry.amount  || '');
+    document.querySelector('#modal-purchase .modal-title').innerHTML =
+      '<span class="badge badge-gold" style="width:28px;height:28px;font-size:14px">✏️</span> 상품매입 수정';
+    document.querySelector('#modal-purchase .submit-btn').textContent = '✓ 수정 저장';
+  }
+  else if (type === 'credit_buy') {
+    setChip('cg-credit_buy-proof', entry.proof || '');
+    setChip('cg-credit_buy-paid',  entry.paid  || '');
+    sv('credit_buy-month',        entry.month  || '');
+    sv('credit_buy-vendor',       entry.vendor || '');
+    sv('credit_buy-vendor-text',  '');
+    sv('credit_buy-product',      entry.product || '');
+    sv('credit_buy-product-text', '');
+    sv('credit_buy-amount',       entry.amount  || '');
+    document.querySelector('#modal-credit_buy .modal-title').innerHTML =
+      '<span class="badge badge-teal" style="width:28px;height:28px;font-size:14px">✏️</span> 외상매입 수정';
+    document.querySelector('#modal-credit_buy .submit-btn').textContent = '✓ 수정 저장';
+  }
+  openModal(type);
+}
+
+// 모달 닫을 때 편집 상태 초기화
+function resetEditState(type) {
+  editingType = null;
+  editingId   = null;
+  const titles = {
+    income:     '<span class="badge badge-blue" style="width:28px;height:28px;font-size:14px">↓</span> 입금 추가',
+    expense:    '<span class="badge badge-red" style="width:28px;height:28px;font-size:14px">↑</span> 출금(판관비) 추가',
+    purchase:   '<span class="badge badge-gold" style="width:28px;height:28px;font-size:14px">📦</span> 상품매입 추가',
+    credit_buy: '<span class="badge badge-teal" style="width:28px;height:28px;font-size:14px">📋</span> 외상매입 추가',
+  };
+  const btns = { income:'✓ 입금 저장', expense:'✓ 출금 저장', purchase:'✓ 매입 저장', credit_buy:'✓ 외상매입 저장' };
+  if (type) {
+    const t = document.querySelector(`#modal-${type} .modal-title`);
+    const b = document.querySelector(`#modal-${type} .submit-btn`);
+    if (t) t.innerHTML = titles[type];
+    if (b) b.textContent = btns[type];
+  }
+}
+
+// 칩 그룹에서 특정 텍스트 선택
+function setChip(groupId, text) {
+  const group = document.getElementById(groupId);
+  if (!group) return;
+  group.querySelectorAll('.chip').forEach(c => c.className = 'chip');
+  const target = Array.from(group.querySelectorAll('.chip'))
+    .find(c => c.textContent.trim() === text);
+  if (target) {
+    const cls = groupId.includes('income') ? 'sb'
+              : groupId.includes('expense') ? 'sr'
+              : groupId.includes('purchase') ? 'sg' : 'st';
+    target.classList.add(cls);
+  }
+}
+
 // ── RENDER LIST ────────────────────────────────
 function renderList(type) {
   const list = document.getElementById(type+'-list');
@@ -875,7 +1041,10 @@ function renderList(type) {
       <div class="entry-num">${i+1}</div>
       <div class="entry-body"><div class="entry-tags">${tags}</div>${desc?`<div class="entry-desc">${desc}</div>`:''}</div>
       <div class="entry-amount ${ac}">${fmt(e.amount)}</div>
-      <button class="entry-del" onclick="deleteEntry('${type}','${e.id}')">✕</button>
+      <div class="entry-actions">
+        <button class="entry-edit" onclick="editEntry('${type}','${e.id}')">✏️</button>
+        <button class="entry-del" onclick="deleteEntry('${type}','${e.id}')">✕</button>
+      </div>
     </div>`;
   }).join('');
 }
@@ -1073,7 +1242,11 @@ function switchTab(name){
   if(name==='export') renderExport();
 }
 function openModal(t){ document.getElementById('modal-'+t).classList.add('open'); document.body.style.overflow='hidden'; }
-function closeModal(t){ document.getElementById('modal-'+t).classList.remove('open'); document.body.style.overflow=''; }
+function closeModal(t){
+  document.getElementById('modal-'+t).classList.remove('open');
+  document.body.style.overflow='';
+  resetEditState(t);
+}
 document.querySelectorAll('.modal-overlay').forEach(o=>{
   o.addEventListener('click',function(e){ if(e.target===this){ this.classList.remove('open'); document.body.style.overflow=''; }});
 });
